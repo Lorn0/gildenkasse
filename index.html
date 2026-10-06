@@ -226,6 +226,6 @@ $('fLogin').onsubmit = async () => {
   const r = await db.auth.signInWithPassword({ email: $('lMail').value, password: $('lPass').value });
   $('lPass').value = ''; if (r.error) toast('Login fehlgeschlagen'); };
 $('logout').onclick = () => db.auth.signOut();
-db.auth.onAuthStateChange(() => refresh());
+db.auth.onAuthStateChange(() => { setTimeout(refresh, 0); });
 refresh();
 </script></body></html>
