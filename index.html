@@ -29,6 +29,7 @@ button:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid 
 <header><h1>Gildenkasse</h1><div><button class="alt" id="login">Anmelden</button><button class="alt" id="logout" hidden>Abmelden</button></div></header>
 <main>
 <div class="bal"><small>Kassenstand</small><b id="bal">…</b></div>
+<p id="noRole" class="hint" hidden>Dein Konto hat noch keine Rolle. Bitte den Admin, dir eine zu geben.</p>
 <div id="app" hidden>
 <nav id="nav"></nav>
 <section id="t-members">
@@ -46,17 +47,17 @@ button:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid 
  <form id="fOut"><label>Betrag (z. B. 2kkk)<input id="outAmt" required></label>
  <label>Datum<input type="date" id="outDate" required></label><label>Zweck<input id="outPurpose" required size="30"></label><button>Ausgabe buchen</button></form>
 </section>
-<section id="t-log" hidden><div class="wrap"><table><thead><tr><th>Datum</th><th>Art</th><th>Details</th><th>Betrag</th><th>Eingetragen von</th><th></th></tr></thead><tbody id="log"></tbody></table></div></section>
+<section id="t-log" hidden><p><button class="alt" id="csv">Backup als CSV herunterladen</button></p><div class="wrap"><table><thead><tr><th>Datum</th><th>Art</th><th>Details</th><th>Betrag</th><th>Eingetragen von</th><th></th></tr></thead><tbody id="log"></tbody></table></div></section>
 <section id="t-set" hidden>
  <form id="fSet"><label>Wochenziel (0 = kein Ziel)<input id="sGoal" required></label>
  <label>Anfangsbestand<input id="sOpen" required></label><button>Speichern</button></form>
  <p class="hint">Der Anfangsbestand ist der Kassenstand vor der ersten Buchung. Bei jeder Änderung bitte kurz im Gildenchat Bescheid geben.</p>
- <button class="alt" id="csv">Backup als CSV herunterladen</button>
  <div id="adminBox" hidden>
-  <h3>Namen zuweisen (nur Admin)</h3>
+  <h3>Konten und Rollen (nur Admin)</h3>
   <form id="fStaff"><label>E-Mail des Kontos<input type="email" id="stMail" required></label>
-  <label>Name (Ingame/Discord)<input id="stName" required></label><button>Speichern</button></form>
-  <div class="wrap"><table><thead><tr><th>E-Mail</th><th>Name</th><th>Admin</th></tr></thead><tbody id="staffRows"></tbody></table></div>
+  <label>Name (Ingame/Discord)<input id="stName" required></label>
+  <label>Rolle<select id="stRole"><option value="">keine (Zugang entzogen)</option><option value="leader">Leader</option><option value="treasurer">Schatzmeister</option><option value="admin">Admin</option></select></label><button>Speichern</button></form>
+  <div class="wrap"><table><thead><tr><th>E-Mail</th><th>Name</th><th>Rolle</th></tr></thead><tbody id="staffRows"></tbody></table></div>
   <p class="hint">Klick auf eine Zeile übernimmt sie ins Formular. Im Verlauf steht dann der Name statt der E-Mail.</p>
  </div>
 </section>
@@ -82,9 +83,9 @@ const ms = s => Date.parse(s + 'T00:00:00Z');
 const today = () => new Date().toLocaleDateString('sv-SE');
 const monOf = t => t - ((new Date(t).getUTCDay() + 6) % 7) * 864e5;
 const dmy = s => s ? s.split('-').reverse().join('.') : '–';
-let S = null, tab = 'members', ME = '';
+let S = null, tab = 'members', ME = '', ROLE = '';
 // Show the display name assigned by the admin, fall back to the e-mail
-const nameOf = e => (S.staff.find(x => x.email.toLowerCase() === String(e || '').toLowerCase()) || {}).display_name || e || '';
+const nameOf = e => (S.names.find(x => x.email.toLowerCase() === String(e || '').toLowerCase()) || {}).display_name || e || '';
 
 // 1 KKK = 1,000,000,000 Yang; display only, storage stays whole Yang
 function fmt(n) {
@@ -119,13 +120,18 @@ async function loadBalance() {
 async function refresh() {
   await loadBalance();
   const { data: { session } } = await db.auth.getSession();
-  $('app').hidden = !session; $('login').hidden = !!session; $('logout').hidden = !session;
-  if (!session) { S = null; return; }
+  $('login').hidden = !!session; $('logout').hidden = !session;
+  if (!session) { S = null; $('app').hidden = true; $('noRole').hidden = true; return; }
   try {
+    ME = (session.user.email || '').toLowerCase();
+    const me = await fetchAll('staff');   // admin gets all rows, everyone else only their own
+    ROLE = (me.find(x => x.email.toLowerCase() === ME) || {}).role || '';
+    $('app').hidden = !ROLE; $('noRole').hidden = !!ROLE;
+    if (!ROLE) { S = null; return; }
     const s = await db.from('settings').select().single(); if (s.error) throw s.error;
     S = { settings: s.data, members: await fetchAll('members'), donations: await fetchAll('donations'), expenses: await fetchAll('expenses') };
-    S.staff = await fetchAll('staff').catch(() => []);   // optional table: page still works without it
-    ME = (session.user.email || '').toLowerCase();
+    S.staff = me;
+    S.names = await fetchAll('staff_names');
   } catch (e) { toast('Laden fehlgeschlagen: ' + e.message); return; }
   render();
 }
@@ -148,8 +154,9 @@ function statusCell(s) {
 }
 
 function render() {
-  const isAdmin = S.staff.some(x => x.email.toLowerCase() === ME && x.is_admin);
-  const nav = [['members','Mitglieder'],['in','Einnahme'],['out','Ausgabe'],['log','Verlauf'],['set','Einstellungen']].filter(([k]) => k !== 'set' || isAdmin);
+  const isAdmin = ROLE === 'admin', canBook = isAdmin || ROLE === 'treasurer';
+  $('fMember').hidden = !canBook;
+  const nav = [['members','Mitglieder'],['in','Einnahme'],['out','Ausgabe'],['log','Verlauf'],['set','Einstellungen']].filter(([k]) => k === 'set' ? isAdmin : (k === 'in' || k === 'out') ? canBook : true);
   if (!nav.some(([k]) => k === tab)) tab = 'members';
   $('nav').innerHTML = nav.map(([k, t]) => `<button class="alt ${k === tab ? 'on' : ''}" data-t="${k}">${t}</button>`).join('');
   ['members','in','out','log','set'].forEach(k => $('t-' + k).hidden = k !== tab);
@@ -161,15 +168,16 @@ function render() {
     return `<tr><td class="name" data-m="${x.m.id}">${esc(x.m.name)}${x.m.active ? '' : ' (inaktiv)'}</td>
     <td class="n"><b>${x.s.total ? fmt(x.s.total) : '–'}</b></td><td class="n">${x.s.count}</td><td class="n">${dmy(x.s.last)}</td>
     <td class="n">${x.s.wk ? fmt(x.s.wk) : '–'}</td><td class="${cls}">${txt}</td><td class="n">${rank(x)}</td>
-    <td><button class="alt sm" data-act="${x.m.id}">${x.m.active ? 'Deaktivieren' : 'Aktivieren'}</button></td></tr>`;
+    <td>${canBook ? `<button class="alt sm" data-act="${x.m.id}">${x.m.active ? 'Deaktivieren' : 'Aktivieren'}</button>` : ''}</td></tr>`;
   }).join('');
 
   $('inMember').innerHTML = S.members.filter(m => m.active).map(m => `<option value="${m.id}">${esc(m.name)}</option>`).join('');
   if (!$('inDate').value) $('inDate').value = today();
   if (!$('outDate').value) $('outDate').value = today();
   $('sGoal').value = S.settings.weekly_goal; $('sOpen').value = S.settings.opening_balance;
-  $('adminBox').hidden = !S.staff.some(x => x.email.toLowerCase() === ME && x.is_admin);
-  $('staffRows').innerHTML = S.staff.map(x => `<tr class="name" data-e="${esc(x.email)}" data-n="${esc(x.display_name)}"><td>${esc(x.email)}</td><td>${esc(x.display_name)}</td><td>${x.is_admin ? 'ja' : ''}</td></tr>`).join('');
+  $('adminBox').hidden = !isAdmin;
+  const RL = { admin: 'Admin', treasurer: 'Schatzmeister', leader: 'Leader' };
+  $('staffRows').innerHTML = S.staff.map(x => `<tr class="name" data-e="${esc(x.email)}" data-n="${esc(x.display_name)}" data-r="${esc(x.role)}"><td>${esc(x.email)}</td><td>${esc(x.display_name)}</td><td>${RL[x.role] || 'keine'}</td></tr>`).join('');
 
   const names = Object.fromEntries(S.members.map(m => [m.id, m.name]));
   const done = new Set([...S.donations, ...S.expenses].map(r => r.storno_of).filter(Boolean));
@@ -178,7 +186,7 @@ function render() {
     ...S.expenses.map(e => ({ t: 'out', r: e, det: e.purpose }))
   ].sort((a, b) => b.r.created_at.localeCompare(a.r.created_at)).slice(0, 60);
   $('log').innerHTML = rows.map(({ t, r, det }) => {
-    const can = r.amount > 0 && !r.storno_of && !done.has(r.id);
+    const can = canBook && r.amount > 0 && !r.storno_of && !done.has(r.id);
     const val = (t === 'in' ? 1 : -1) * r.amount;
     return `<tr><td>${dmy(r.booked_on)}</td><td>${t === 'in' ? 'Einnahme' : 'Ausgabe'}</td><td>${esc(det)}</td>
     <td class="n ${val < 0 ? 'neg' : ''}">${val > 0 ? '+' : ''}${fmt(val)}</td><td>${esc(nameOf(r.created_by))}</td>
@@ -227,9 +235,9 @@ $('fSet').onsubmit = e => { e.preventDefault();
   const g = parseAmt($('sGoal').value), o = parseAmt($('sOpen').value);
   if (g === null || o === null) return toast('Zahl nicht lesbar');
   run(db.from('settings').update({ weekly_goal: g, opening_balance: o }).eq('id', 1), 'Gespeichert'); };
-$('staffRows').onclick = e => { const r = e.target.closest('tr'); if (r) { $('stMail').value = r.dataset.e; $('stName').value = r.dataset.n; } };
+$('staffRows').onclick = e => { const r = e.target.closest('tr'); if (r) { $('stMail').value = r.dataset.e; $('stName').value = r.dataset.n; $('stRole').value = r.dataset.r; } };
 $('fStaff').onsubmit = e => { e.preventDefault();
-  run(db.from('staff').upsert({ email: $('stMail').value.trim().toLowerCase(), display_name: $('stName').value.trim() }, { onConflict: 'email' }), 'Name gespeichert'); };
+  run(db.from('staff').upsert({ email: $('stMail').value.trim().toLowerCase(), display_name: $('stName').value.trim(), role: $('stRole').value || null }, { onConflict: 'email' }), 'Gespeichert'); };
 $('csv').onclick = () => {
   const q = v => '"' + String(v ?? '').replace(/"/g, '""') + '"';
   const names = Object.fromEntries(S.members.map(m => [m.id, m.name]));
