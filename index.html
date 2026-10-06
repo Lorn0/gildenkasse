@@ -225,13 +225,13 @@ function render() {
   $('staffRows').innerHTML = S.staff.map(x => `<tr class="name" data-e="${esc(x.email)}" data-n="${esc(x.display_name)}" data-r="${esc(x.role)}"><td>${esc(x.email)}</td><td>${esc(x.display_name)}</td><td>${RL[x.role] || 'keine'}</td></tr>`).join('');
 
   const names = Object.fromEntries(S.members.map(m => [m.id, m.name]));
-  const done = new Set([...S.donations, ...S.expenses].map(r => r.storno_of).filter(Boolean));
+  const done = new Set([...S.donations.filter(d => d.storno_of).map(d => 'in' + d.storno_of), ...S.expenses.filter(x => x.storno_of).map(x => 'out' + x.storno_of)]);
   const rows = [
     ...S.donations.map(d => ({ t: 'in', r: d, det: names[d.member_id] + (d.note ? ' – ' + d.note : '') })),
     ...S.expenses.map(e => ({ t: 'out', r: e, det: e.purpose }))
   ].sort((a, b) => b.r.created_at.localeCompare(a.r.created_at)).slice(0, 60);
   $('log').innerHTML = rows.map(({ t, r, det }) => {
-    const can = canBook && r.amount > 0 && !r.storno_of && !done.has(r.id);
+    const can = canBook && r.amount > 0 && !r.storno_of && !done.has(t + r.id);
     const val = (t === 'in' ? 1 : -1) * r.amount;
     return `<tr><td>${dmy(r.booked_on)}</td><td>${t === 'in' ? 'Einnahme' : 'Ausgabe'}</td><td>${esc(det)}</td>
     <td class="n ${val < 0 ? 'neg' : ''}">${val > 0 ? '+' : ''}${fmt(val)}</td><td>${esc(nameOf(r.created_by))}</td>
