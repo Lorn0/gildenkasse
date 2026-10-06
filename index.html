@@ -52,6 +52,13 @@ button:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid 
  <label>Anfangsbestand<input id="sOpen" required></label><button>Speichern</button></form>
  <p class="hint">Der Anfangsbestand ist der Kassenstand vor der ersten Buchung. Bei jeder Änderung bitte kurz im Gildenchat Bescheid geben.</p>
  <button class="alt" id="csv">Backup als CSV herunterladen</button>
+ <div id="adminBox" hidden>
+  <h3>Namen zuweisen (nur Admin)</h3>
+  <form id="fStaff"><label>E-Mail des Kontos<input type="email" id="stMail" required></label>
+  <label>Name (Ingame/Discord)<input id="stName" required></label><button>Speichern</button></form>
+  <div class="wrap"><table><thead><tr><th>E-Mail</th><th>Name</th><th>Admin</th></tr></thead><tbody id="staffRows"></tbody></table></div>
+  <p class="hint">Klick auf eine Zeile übernimmt sie ins Formular. Im Verlauf steht dann der Name statt der E-Mail.</p>
+ </div>
 </section>
 </div>
 </main>
@@ -75,7 +82,9 @@ const ms = s => Date.parse(s + 'T00:00:00Z');
 const today = () => new Date().toLocaleDateString('sv-SE');
 const monOf = t => t - ((new Date(t).getUTCDay() + 6) % 7) * 864e5;
 const dmy = s => s ? s.split('-').reverse().join('.') : '–';
-let S = null, tab = 'members';
+let S = null, tab = 'members', ME = '';
+// Show the display name assigned by the admin, fall back to the e-mail
+const nameOf = e => (S.staff.find(x => x.email.toLowerCase() === String(e || '').toLowerCase()) || {}).display_name || e || '';
 
 // 1 KKK = 1,000,000,000 Yang; display only, storage stays whole Yang
 function fmt(n) {
@@ -115,6 +124,8 @@ async function refresh() {
   try {
     const s = await db.from('settings').select().single(); if (s.error) throw s.error;
     S = { settings: s.data, members: await fetchAll('members'), donations: await fetchAll('donations'), expenses: await fetchAll('expenses') };
+    S.staff = await fetchAll('staff').catch(() => []);   // optional table: page still works without it
+    ME = (session.user.email || '').toLowerCase();
   } catch (e) { toast('Laden fehlgeschlagen: ' + e.message); return; }
   render();
 }
@@ -123,7 +134,8 @@ function stats(m) {
   const g = S.settings.weekly_goal, mon = monOf(ms(today()));
   const ds = S.donations.filter(d => d.member_id === m.id);
   const total = ds.reduce((a, d) => a + d.amount, 0);
-  const pos = ds.filter(d => d.amount > 0);
+  const rev = new Set(S.donations.filter(d => d.storno_of).map(d => d.storno_of));
+  const pos = ds.filter(d => d.amount > 0 && !rev.has(d.id));
   const last = pos.reduce((a, d) => d.booked_on > a ? d.booked_on : a, '');
   const wk = ds.filter(d => ms(d.booked_on) >= mon && ms(d.booked_on) < mon + WEEK).reduce((a, d) => a + d.amount, 0);
   const st = ms(m.start_week), weeks = mon >= st ? (mon - st) / WEEK + 1 : 0;
@@ -136,9 +148,11 @@ function statusCell(s) {
 }
 
 function render() {
-  const nav = [['members','Mitglieder'],['in','Einnahme'],['out','Ausgabe'],['log','Verlauf'],['set','Einstellungen']];
+  const isAdmin = S.staff.some(x => x.email.toLowerCase() === ME && x.is_admin);
+  const nav = [['members','Mitglieder'],['in','Einnahme'],['out','Ausgabe'],['log','Verlauf'],['set','Einstellungen']].filter(([k]) => k !== 'set' || isAdmin);
+  if (!nav.some(([k]) => k === tab)) tab = 'members';
   $('nav').innerHTML = nav.map(([k, t]) => `<button class="alt ${k === tab ? 'on' : ''}" data-t="${k}">${t}</button>`).join('');
-  nav.forEach(([k]) => $('t-' + k).hidden = k !== tab);
+  ['members','in','out','log','set'].forEach(k => $('t-' + k).hidden = k !== tab);
 
   const list = S.members.filter(m => m.active || $('showInactive').checked).map(m => ({ m, s: stats(m) }));
   const rank = x => x.s.total > 0 ? 1 + list.filter(y => y.s.total > x.s.total).length : '–';
@@ -154,6 +168,8 @@ function render() {
   if (!$('inDate').value) $('inDate').value = today();
   if (!$('outDate').value) $('outDate').value = today();
   $('sGoal').value = S.settings.weekly_goal; $('sOpen').value = S.settings.opening_balance;
+  $('adminBox').hidden = !S.staff.some(x => x.email.toLowerCase() === ME && x.is_admin);
+  $('staffRows').innerHTML = S.staff.map(x => `<tr class="name" data-e="${esc(x.email)}" data-n="${esc(x.display_name)}"><td>${esc(x.email)}</td><td>${esc(x.display_name)}</td><td>${x.is_admin ? 'ja' : ''}</td></tr>`).join('');
 
   const names = Object.fromEntries(S.members.map(m => [m.id, m.name]));
   const done = new Set([...S.donations, ...S.expenses].map(r => r.storno_of).filter(Boolean));
@@ -165,7 +181,7 @@ function render() {
     const can = r.amount > 0 && !r.storno_of && !done.has(r.id);
     const val = (t === 'in' ? 1 : -1) * r.amount;
     return `<tr><td>${dmy(r.booked_on)}</td><td>${t === 'in' ? 'Einnahme' : 'Ausgabe'}</td><td>${esc(det)}</td>
-    <td class="n ${val < 0 ? 'neg' : ''}">${val > 0 ? '+' : ''}${fmt(val)}</td><td>${esc(r.created_by)}</td>
+    <td class="n ${val < 0 ? 'neg' : ''}">${val > 0 ? '+' : ''}${fmt(val)}</td><td>${esc(nameOf(r.created_by))}</td>
     <td>${can ? `<button class="alt sm" data-st="${t}:${r.id}">Stornieren</button>` : ''}</td></tr>`;
   }).join('');
 }
@@ -211,6 +227,9 @@ $('fSet').onsubmit = e => { e.preventDefault();
   const g = parseAmt($('sGoal').value), o = parseAmt($('sOpen').value);
   if (g === null || o === null) return toast('Zahl nicht lesbar');
   run(db.from('settings').update({ weekly_goal: g, opening_balance: o }).eq('id', 1), 'Gespeichert'); };
+$('staffRows').onclick = e => { const r = e.target.closest('tr'); if (r) { $('stMail').value = r.dataset.e; $('stName').value = r.dataset.n; } };
+$('fStaff').onsubmit = e => { e.preventDefault();
+  run(db.from('staff').upsert({ email: $('stMail').value.trim().toLowerCase(), display_name: $('stName').value.trim() }, { onConflict: 'email' }), 'Name gespeichert'); };
 $('csv').onclick = () => {
   const q = v => '"' + String(v ?? '').replace(/"/g, '""') + '"';
   const names = Object.fromEntries(S.members.map(m => [m.id, m.name]));
@@ -226,6 +245,7 @@ $('fLogin').onsubmit = async () => {
   const r = await db.auth.signInWithPassword({ email: $('lMail').value, password: $('lPass').value });
   $('lPass').value = ''; if (r.error) toast('Login fehlgeschlagen'); };
 $('logout').onclick = () => db.auth.signOut();
+// Never await Supabase calls inside this callback (auth lock deadlock), so defer the refresh.
 db.auth.onAuthStateChange(() => { setTimeout(refresh, 0); });
 refresh();
 </script></body></html>
