@@ -1,0 +1,231 @@
+<!doctype html>
+<html lang="de"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Gildenkasse</title>
+<style>
+:root{--br:#5c1a1a;--cr:#fff1d0;--ok:#d9ead3;--bad:#f4cccc;--bd:#dccfae;--tx:#241c1c}
+*{box-sizing:border-box}
+body{font:15px/1.4 system-ui,sans-serif;margin:0;background:#fbf8f1;color:var(--tx)}
+header{background:var(--br);color:#fff;padding:14px 20px;display:flex;justify-content:space-between;align-items:center;gap:10px}
+h1{margin:0;font-size:22px}main{max-width:1050px;margin:0 auto;padding:16px}
+.bal{text-align:center;background:#fff;border:1px solid var(--bd);border-radius:8px;padding:28px 16px;margin-bottom:16px}
+.bal b{display:block;font-size:46px;color:var(--br)}.bal small{color:#7a6e6e}
+nav{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px}
+button{font:inherit;cursor:pointer;border:1px solid var(--br);background:var(--br);color:#fff;border-radius:6px;padding:7px 14px}
+button.alt{background:#fff;color:var(--br)}nav button.on{background:var(--cr);color:var(--br);font-weight:600}
+button.sm{padding:2px 8px;font-size:13px}
+input,select{font:inherit;padding:7px 9px;border:1px solid var(--bd);border-radius:6px;background:#fff;max-width:100%}
+form{display:flex;gap:8px;flex-wrap:wrap;align-items:end;margin-bottom:14px}
+label{display:flex;flex-direction:column;gap:3px;font-size:13px;color:#6b5d5d}
+table{width:100%;border-collapse:collapse;background:#fff}
+th{background:var(--br);color:#fff;padding:8px;text-align:left;font-weight:600}
+td{padding:6px 8px;border:1px solid var(--bd)}td.n{text-align:right}
+td.ok{background:var(--ok)}td.bad{background:var(--bad)}.name{cursor:pointer;background:var(--cr);font-weight:600}
+.wrap{overflow-x:auto}.hint{color:#7a6e6e;font-size:13px}.neg{color:#a02020}
+dialog{border:1px solid var(--bd);border-radius:8px;max-width:520px;width:92%}
+#toast{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:var(--br);color:#fff;padding:9px 16px;border-radius:6px;display:none}
+button:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid #c28a2c;outline-offset:1px}
+</style></head><body>
+<header><h1>Gildenkasse</h1><div><button class="alt" id="login">Anmelden</button><button class="alt" id="logout" hidden>Abmelden</button></div></header>
+<main>
+<div class="bal"><small>Kassenstand</small><b id="bal">…</b></div>
+<div id="app" hidden>
+<nav id="nav"></nav>
+<section id="t-members">
+ <form id="fMember"><label>Neues Mitglied<input id="mName" required></label><button>Hinzufügen</button>
+ <label style="flex-direction:row;align-items:center"><input type="checkbox" id="showInactive"> Inaktive zeigen</label></form>
+ <div class="wrap"><table><thead><tr><th>Mitglied</th><th>Gesamt</th><th>Spenden</th><th>Letzte Spende</th><th>Diese Woche</th><th>Wochenziel</th><th>Rang</th><th></th></tr></thead><tbody id="rows"></tbody></table></div>
+ <p class="hint">Klick auf einen Namen zeigt alle Spenden. Zählung ab der Startwoche, Rückstände bleiben bestehen.</p>
+</section>
+<section id="t-in" hidden>
+ <form id="fIn"><label>Mitglied<select id="inMember" required></select></label>
+ <label>Betrag (z. B. 3kkk, 1,5kkk, 500kk)<input id="inAmt" required></label>
+ <label>Datum<input type="date" id="inDate" required></label><label>Notiz<input id="inNote"></label><button>Einnahme buchen</button></form>
+</section>
+<section id="t-out" hidden>
+ <form id="fOut"><label>Betrag (z. B. 2kkk)<input id="outAmt" required></label>
+ <label>Datum<input type="date" id="outDate" required></label><label>Zweck<input id="outPurpose" required size="30"></label><button>Ausgabe buchen</button></form>
+</section>
+<section id="t-log" hidden><div class="wrap"><table><thead><tr><th>Datum</th><th>Art</th><th>Details</th><th>Betrag</th><th>Eingetragen von</th><th></th></tr></thead><tbody id="log"></tbody></table></div></section>
+<section id="t-set" hidden>
+ <form id="fSet"><label>Wochenziel (0 = kein Ziel)<input id="sGoal" required></label>
+ <label>Anfangsbestand<input id="sOpen" required></label><button>Speichern</button></form>
+ <p class="hint">Der Anfangsbestand ist der Kassenstand vor der ersten Buchung. Bei jeder Änderung bitte kurz im Gildenchat Bescheid geben.</p>
+ <button class="alt" id="csv">Backup als CSV herunterladen</button>
+</section>
+</div>
+</main>
+<dialog id="dlgLogin"><form id="fLogin" method="dialog" style="flex-direction:column;align-items:stretch">
+ <label>E-Mail<input type="email" id="lMail" required></label><label>Passwort<input type="password" id="lPass" required></label>
+ <div style="display:flex;gap:8px"><button>Anmelden</button><button type="button" class="alt" id="lCancel">Abbrechen</button></div></form></dialog>
+<dialog id="dlgInfo"><div id="infoBody"></div><p><button class="alt" id="infoClose">Schließen</button></p></dialog>
+<div id="toast"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+<script>
+// Fill in from Supabase: Project Settings -> API (the anon/publishable key is public by design).
+const SUPABASE_URL = 'https://iwbehqwqrisinmihizmp.supabase.co';
+const SUPABASE_KEY = 'sb_publishable_Hqo76k3mlUxwXGjXOlTsmA_2LpJK22t';
+const db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const WEEK = 7 * 864e5;
+const ms = s => Date.parse(s + 'T00:00:00Z');
+const today = () => new Date().toLocaleDateString('sv-SE');
+const monOf = t => t - ((new Date(t).getUTCDay() + 6) % 7) * 864e5;
+const dmy = s => s ? s.split('-').reverse().join('.') : '–';
+let S = null, tab = 'members';
+
+// 1 KKK = 1,000,000,000 Yang; display only, storage stays whole Yang
+function fmt(n) {
+  const a = Math.abs(n); let v = n, u = 'Yang';
+  if (a >= 1e9) { v = n / 1e9; u = 'KKK'; } else if (a >= 1e6) { v = n / 1e6; u = 'KK'; }
+  return v.toLocaleString('de-DE', {maximumFractionDigits: 3}) + ' ' + u;
+}
+function parseAmt(s) {
+  s = String(s).trim().toLowerCase().replace(/\s/g, '');
+  const m = s.match(/^([\d.,]+)(k{0,3})$/); if (!m) return null;
+  const mult = {'': 1, k: 1e3, kk: 1e6, kkk: 1e9}[m[2]];
+  const num = m[2] ? m[1].replace(',', '.') : m[1].replace(/[.,]/g, '');
+  const v = Math.round(parseFloat(num) * mult);
+  return isFinite(v) && v >= 0 ? v : null;
+}
+function toast(t) { const e = $('toast'); e.textContent = t; e.style.display = 'block'; setTimeout(() => e.style.display = 'none', 3500); }
+
+async function fetchAll(t) {
+  let out = [], from = 0;
+  for (;;) {
+    const r = await db.from(t).select().order('id').range(from, from + 999);
+    if (r.error) throw r.error;
+    out = out.concat(r.data);
+    if (r.data.length < 1000) return out;
+    from += 1000;
+  }
+}
+async function loadBalance() {
+  const r = await db.rpc('get_balance');
+  $('bal').textContent = r.error ? 'nicht erreichbar' : fmt(r.data);
+}
+async function refresh() {
+  await loadBalance();
+  const { data: { session } } = await db.auth.getSession();
+  $('app').hidden = !session; $('login').hidden = !!session; $('logout').hidden = !session;
+  if (!session) { S = null; return; }
+  try {
+    const s = await db.from('settings').select().single(); if (s.error) throw s.error;
+    S = { settings: s.data, members: await fetchAll('members'), donations: await fetchAll('donations'), expenses: await fetchAll('expenses') };
+  } catch (e) { toast('Laden fehlgeschlagen: ' + e.message); return; }
+  render();
+}
+
+function stats(m) {
+  const g = S.settings.weekly_goal, mon = monOf(ms(today()));
+  const ds = S.donations.filter(d => d.member_id === m.id);
+  const total = ds.reduce((a, d) => a + d.amount, 0);
+  const pos = ds.filter(d => d.amount > 0);
+  const last = pos.reduce((a, d) => d.booked_on > a ? d.booked_on : a, '');
+  const wk = ds.filter(d => ms(d.booked_on) >= mon && ms(d.booked_on) < mon + WEEK).reduce((a, d) => a + d.amount, 0);
+  const st = ms(m.start_week), weeks = mon >= st ? (mon - st) / WEEK + 1 : 0;
+  return { total, count: pos.length, last, wk, diff: total - weeks * g, g };
+}
+function statusCell(s) {
+  if (!s.g) return ['kein Ziel', ''];
+  if (s.diff >= 0) { const n = Math.floor(s.diff / s.g); return [n ? `erreicht (+${n} Wo. voraus)` : 'erreicht', 'ok']; }
+  return [`offen: ${Math.ceil(-s.diff / s.g)} Wo. (${fmt(-s.diff)})`, 'bad'];
+}
+
+function render() {
+  const nav = [['members','Mitglieder'],['in','Einnahme'],['out','Ausgabe'],['log','Verlauf'],['set','Einstellungen']];
+  $('nav').innerHTML = nav.map(([k, t]) => `<button class="alt ${k === tab ? 'on' : ''}" data-t="${k}">${t}</button>`).join('');
+  nav.forEach(([k]) => $('t-' + k).hidden = k !== tab);
+
+  const list = S.members.filter(m => m.active || $('showInactive').checked).map(m => ({ m, s: stats(m) }));
+  const rank = x => x.s.total > 0 ? 1 + list.filter(y => y.s.total > x.s.total).length : '–';
+  $('rows').innerHTML = list.map(x => {
+    const [txt, cls] = statusCell(x.s);
+    return `<tr><td class="name" data-m="${x.m.id}">${esc(x.m.name)}${x.m.active ? '' : ' (inaktiv)'}</td>
+    <td class="n"><b>${x.s.total ? fmt(x.s.total) : '–'}</b></td><td class="n">${x.s.count}</td><td class="n">${dmy(x.s.last)}</td>
+    <td class="n">${x.s.wk ? fmt(x.s.wk) : '–'}</td><td class="${cls}">${txt}</td><td class="n">${rank(x)}</td>
+    <td><button class="alt sm" data-act="${x.m.id}">${x.m.active ? 'Deaktivieren' : 'Aktivieren'}</button></td></tr>`;
+  }).join('');
+
+  $('inMember').innerHTML = S.members.filter(m => m.active).map(m => `<option value="${m.id}">${esc(m.name)}</option>`).join('');
+  if (!$('inDate').value) $('inDate').value = today();
+  if (!$('outDate').value) $('outDate').value = today();
+  $('sGoal').value = S.settings.weekly_goal; $('sOpen').value = S.settings.opening_balance;
+
+  const names = Object.fromEntries(S.members.map(m => [m.id, m.name]));
+  const done = new Set([...S.donations, ...S.expenses].map(r => r.storno_of).filter(Boolean));
+  const rows = [
+    ...S.donations.map(d => ({ t: 'in', r: d, det: names[d.member_id] + (d.note ? ' – ' + d.note : '') })),
+    ...S.expenses.map(e => ({ t: 'out', r: e, det: e.purpose }))
+  ].sort((a, b) => b.r.created_at.localeCompare(a.r.created_at)).slice(0, 60);
+  $('log').innerHTML = rows.map(({ t, r, det }) => {
+    const can = r.amount > 0 && !r.storno_of && !done.has(r.id);
+    const val = (t === 'in' ? 1 : -1) * r.amount;
+    return `<tr><td>${dmy(r.booked_on)}</td><td>${t === 'in' ? 'Einnahme' : 'Ausgabe'}</td><td>${esc(det)}</td>
+    <td class="n ${val < 0 ? 'neg' : ''}">${val > 0 ? '+' : ''}${fmt(val)}</td><td>${esc(r.created_by)}</td>
+    <td>${can ? `<button class="alt sm" data-st="${t}:${r.id}">Stornieren</button>` : ''}</td></tr>`;
+  }).join('');
+}
+
+async function run(p, ok) {
+  const r = await p; if (r.error) return toast('Fehler: ' + r.error.message);
+  if (ok) toast(ok); await refresh();
+}
+$('nav').onclick = e => { const t = e.target.dataset.t; if (t) { tab = t; render(); } };
+$('showInactive').onchange = render;
+$('fMember').onsubmit = async e => { e.preventDefault(); const n = $('mName').value.trim(); if (!n) return;
+  await run(db.from('members').insert({ name: n, start_week: new Date(monOf(ms(today()))).toISOString().slice(0, 10) }), 'Mitglied angelegt'); $('mName').value = ''; };
+$('rows').onclick = e => {
+  const a = e.target.dataset.act, id = Number(e.target.dataset.m);
+  if (a) { const m = S.members.find(x => x.id == a); run(db.from('members').update({ active: !m.active }).eq('id', m.id)); }
+  if (id) { const m = S.members.find(x => x.id === id);
+    const ds = S.donations.filter(d => d.member_id === id).sort((x, y) => y.booked_on.localeCompare(x.booked_on));
+    $('infoBody').innerHTML = `<h3>${esc(m.name)}</h3>` + (ds.length ? '<table>' + ds.map(d => `<tr><td>${dmy(d.booked_on)}</td><td class="n">${fmt(d.amount)}</td><td>${esc(d.note)}</td></tr>`).join('') + '</table>' : 'Noch keine Spenden.');
+    $('dlgInfo').showModal(); }
+};
+$('infoClose').onclick = () => $('dlgInfo').close();
+$('fIn').onsubmit = async e => { e.preventDefault();
+  const amt = parseAmt($('inAmt').value); if (!amt) return toast('Betrag nicht lesbar, z. B. 3kkk');
+  const m = S.members.find(x => x.id == $('inMember').value);
+  if (!confirm(`Einnahme ${fmt(amt)} von ${m.name} buchen?`)) return;
+  await run(db.from('donations').insert({ member_id: m.id, amount: amt, booked_on: $('inDate').value, note: $('inNote').value.trim() || null }), 'Einnahme gebucht');
+  $('inAmt').value = ''; $('inNote').value = ''; };
+$('fOut').onsubmit = async e => { e.preventDefault();
+  const amt = parseAmt($('outAmt').value); if (!amt) return toast('Betrag nicht lesbar, z. B. 2kkk');
+  const why = $('outPurpose').value.trim();
+  if (!confirm(`Ausgabe ${fmt(amt)} für "${why}" buchen?`)) return;
+  await run(db.from('expenses').insert({ amount: amt, booked_on: $('outDate').value, purpose: why }), 'Ausgabe gebucht');
+  $('outAmt').value = ''; $('outPurpose').value = ''; };
+$('log').onclick = e => {
+  const [t, id] = (e.target.dataset.st || '').split(':'); if (!t) return;
+  if (!confirm('Diese Buchung per Gegenbuchung stornieren?')) return;
+  if (t === 'in') { const d = S.donations.find(x => x.id == id);
+    run(db.from('donations').insert({ member_id: d.member_id, amount: -d.amount, booked_on: today(), note: 'Storno #' + d.id, storno_of: d.id }), 'Storniert'); }
+  else { const x = S.expenses.find(y => y.id == id);
+    run(db.from('expenses').insert({ amount: -x.amount, booked_on: today(), purpose: 'Storno: ' + x.purpose, storno_of: x.id }), 'Storniert'); }
+};
+$('fSet').onsubmit = e => { e.preventDefault();
+  const g = parseAmt($('sGoal').value), o = parseAmt($('sOpen').value);
+  if (g === null || o === null) return toast('Zahl nicht lesbar');
+  run(db.from('settings').update({ weekly_goal: g, opening_balance: o }).eq('id', 1), 'Gespeichert'); };
+$('csv').onclick = () => {
+  const q = v => '"' + String(v ?? '').replace(/"/g, '""') + '"';
+  const names = Object.fromEntries(S.members.map(m => [m.id, m.name]));
+  const lines = ['Art;Datum;Mitglied;Betrag_Yang;Details;Eingetragen_von',
+    ...S.donations.map(d => ['Einnahme', d.booked_on, names[d.member_id], d.amount, d.note, d.created_by].map(q).join(';')),
+    ...S.expenses.map(x => ['Ausgabe', x.booked_on, '', x.amount, x.purpose, x.created_by].map(q).join(';'))];
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob(['\ufeff' + lines.join('\n')], { type: 'text/csv' }));
+  a.download = 'gildenkasse-' + today() + '.csv'; a.click(); };
+$('login').onclick = () => $('dlgLogin').showModal();
+$('lCancel').onclick = () => $('dlgLogin').close();
+$('fLogin').onsubmit = async () => {
+  const r = await db.auth.signInWithPassword({ email: $('lMail').value, password: $('lPass').value });
+  $('lPass').value = ''; if (r.error) toast('Login fehlgeschlagen'); };
+$('logout').onclick = () => db.auth.signOut();
+db.auth.onAuthStateChange(() => refresh());
+refresh();
+</script></body></html>
