@@ -99,7 +99,7 @@ const SUPABASE_URL = 'https://iwbehqwqrisinmihizmp.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_Hqo76k3mlUxwXGjXOlTsmA_2LpJK22t';
 // Demo mode (sample data, nothing is saved): add ?demo to the URL, or open the page on a host not listed here.
 // If you ever move to your own domain, add it to LIVE_HOSTS.
-const LIVE_HOSTS = ['lorn0.github.io', 'localhost', '127.0.0.1'];
+const LIVE_HOSTS = ['lorn0.github.io', 'exordium-gilde.github.io', 'localhost', '127.0.0.1'];
 const DEMO = new URLSearchParams(location.search).has('demo') || !LIVE_HOSTS.includes(location.hostname);
 const stub = () => new Proxy(function () {}, { get: () => stub(), apply: () => stub() });
 const db = DEMO ? stub() : supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
