@@ -45,6 +45,8 @@ dialog::backdrop{background:#000b}
 #toast{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:#3a2f22;border:1px solid var(--gold);color:#fff;padding:9px 16px;border-radius:4px;display:none}
 button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--gold);outline-offset:1px}
 .invwrap{max-width:380px;margin:0 auto}
+.cols{display:grid;grid-template-columns:2fr 1fr;gap:16px}
+@media(max-width:760px){.cols{grid-template-columns:1fr}}
 .invgrid{display:grid;grid-template-columns:repeat(5,1fr);gap:3px;padding:8px;background:#100d0b}
 .slot{aspect-ratio:1;position:relative;background:#1a1612;border:1px solid #3a3025;display:flex;align-items:center;justify-content:center;cursor:pointer}
 .slot.sel{border-color:var(--gold);box-shadow:0 0 7px var(--gold)}
@@ -59,6 +61,7 @@ button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid 
 <main>
 <p class="demo" id="demoBanner" hidden>Demo-Ansicht mit Beispieldaten, es wird nichts gespeichert.</p>
 <div class="win"><h2>Kassenstand</h2><div class="bal"><b id="bal">…</b></div></div>
+<div id="pubSlot"><div class="win" id="segenWin"><h2>Gildensegen</h2><table><thead><tr><th></th><th>Segen</th><th>Aktivator</th><th>Dauer</th></tr></thead><tbody id="segenRows"></tbody></table></div></div>
 <p id="noRole" class="hint" hidden>Dein Konto hat noch keine Rolle. Bitte den Admin, dir eine zu geben.</p>
 <div id="app" hidden>
 <nav id="nav"></nav>
@@ -77,6 +80,11 @@ button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid 
  <p class="hint">Item antippen oder ziehen, dann das Zielfeld wählen. Stapel bis 1000.</p>
  <p class="hint" id="invChecked"></p><button class="alt" id="invConfirm">Stimmt mit Ingame überein</button>
  <h3>Protokoll</h3><ul id="invLog" class="hint"></ul></div></section>
+<section id="t-segen" hidden>
+ <form id="fSegen"><label>Segen<select id="sgKey"></select></label><label>Aktivator<select id="sgWho"></select></label>
+ <label>Dauer<span class="row" style="margin:0"><button type="button" class="alt sm" id="sgMinus">−</button><b id="sgH">3 h</b><button type="button" class="alt sm" id="sgPlus">+</button></span></label>
+ <label style="flex-direction:row;align-items:center"><input type="checkbox" id="sgBank"> aus Bank-Inventar abziehen</label><button>Segen eintragen</button></form>
+ <div class="cols"><div id="segenSlot"></div><div><h3>Verlauf</h3><ul id="sgLog" class="hint"></ul></div></div></section>
 <section id="t-in" hidden>
  <form id="fIn"><label>Mitglied<select id="inMember" required></select></label>
  <label>Betrag (z. B. 3kkk, 1,5kkk, 500kk)<input id="inAmt" required></label>
@@ -84,7 +92,7 @@ button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid 
 </section>
 <section id="t-out" hidden>
  <form id="fOut"><label>Betrag (z. B. 2kkk)<input id="outAmt" required></label>
- <label>Datum<input type="date" id="outDate" required></label><label>Zweck<input id="outPurpose" required size="30"></label><label>Item (optional)<select id="outItem"></select></label><label>Menge<input type="number" id="outQty" min="1" max="1000" value="1" style="width:80px"></label><button>Ausgabe buchen</button></form>
+ <label>Datum<input type="date" id="outDate" required></label><label>Zweck (nötig, wenn kein Item)<input id="outPurpose" size="30"></label><label>Item (optional)<select id="outItem"></select></label><label>Menge<input type="number" id="outQty" min="1" max="1000" value="1" style="width:80px"></label><button>Ausgabe buchen</button></form>
 </section>
 <section id="t-log" hidden><p><button class="alt" id="csv">Backup als CSV herunterladen</button></p><div class="wrap"><table><thead><tr><th>Datum</th><th>Art</th><th>Details</th><th>Betrag</th><th>Eingetragen von</th><th></th></tr></thead><tbody id="log"></tbody></table></div></section>
 <section id="t-set" hidden>
@@ -167,13 +175,18 @@ async function loadBalance() {
   $('bal').textContent = r.error ? 'nicht erreichbar' : fmt(r.data);
 }
 // ---- Inventory (mirror of the bank char) ----
-let invPage = 1, sel = null;
+let invPage = 1, sel = null, lastSel = '';
+function setOpts(el, html) {   // rebuild options only when they changed, keep the current choice
+  if (el.dataset.o === html) return;
+  const v = el.value; el.innerHTML = html; el.dataset.o = html;
+  if ([...el.options].some(o => o.value === v)) el.value = v;
+}
 const itemName = k => ((S.items || []).find(i => i.key === k) || {}).name || k;
 const slotItem = (p, s) => S.inv.find(i => i.page === p && i.slot === s);
 const rpc = (fn, args, ok) => run(db.rpc(fn, args), ok);
 function renderInv() {
   const canEdit = ROLE === 'admin' || ROLE === 'treasurer', opts = S.items.map(i => `<option value="${i.key}">${esc(i.name)}</option>`).join('');
-  $('invItem').innerHTML = opts; $('outItem').innerHTML = '<option value="">kein Item</option>' + opts;
+  setOpts($('invItem'), opts); setOpts($('outItem'), '<option value="">kein Item</option>' + opts);
   $('invPages').innerHTML = ['I', 'II', 'III', 'IV'].map((t, i) => `<button class="alt ${i + 1 === invPage ? 'on' : ''}" data-p="${i + 1}">${t}</button>`).join('');
   let g = '';
   for (let s = 0; s < 45; s++) {
@@ -185,9 +198,10 @@ function renderInv() {
   if (canEdit && sel) {
     const i = slotItem(sel.page, sel.slot);
     $('invWhere').textContent = `Seite ${['I', 'II', 'III', 'IV'][sel.page - 1]}, Feld ${sel.slot + 1}${i ? ': ' + itemName(i.item_key) : ' (leer)'}`;
-    $('invItem').value = i ? i.item_key : S.items[0].key; $('invQty').value = i ? i.qty : 1;
+    const sk = sel.page + ':' + sel.slot + ':' + (i ? i.qty : 0);
+    if (sk !== lastSel) { lastSel = sk; $('invItem').value = i ? i.item_key : S.items[0].key; $('invQty').value = i ? i.qty : 1; }
     $('invTake').hidden = !i; $('invWhy').parentNode.hidden = !i;
-  }
+  } else lastSel = '';
   const c = S.invCheck;
   $('invChecked').textContent = c && c.checked_at ? `Zuletzt mit Ingame abgeglichen: ${new Date(c.checked_at).toLocaleString('de-DE')} (${nameOf(c.checked_by)})` : 'Noch nie mit Ingame abgeglichen.';
   $('invLog').innerHTML = S.invLog.map(l => `<li>${new Date(l.at).toLocaleString('de-DE')} – ${esc(nameOf(l.actor))}: ${esc(l.action)}${l.item_key ? ' ' + l.qty + '× ' + esc(itemName(l.item_key)) : ''}${l.note ? ' (' + esc(l.note) + ')' : ''}</li>`).join('');
@@ -218,6 +232,47 @@ $('invTake').onclick = () => {
 };
 $('invConfirm').onclick = () => rpc('inv_confirm', {}, 'Abgleich gespeichert');
 
+// ---- Blessings (public window + entry form) ----
+const BLESS = ITEMS.slice(0, 6), BONUS = { xp: 'Erfahrung +50%' };   // other bonus texts follow with the full ingame window
+let BL = {}, sgHours = 3;
+const hms = ms => { const s = Math.max(0, Math.floor(ms / 1000)); return [Math.floor(s / 3600), Math.floor(s / 60) % 60, s % 60].map(n => String(n).padStart(2, '0')).join(':'); };
+async function loadSegen() {
+  if (DEMO) { const t = Date.now(); BL = { xp: { activator: 'Tschigarillo', ends: t + 6078e3 }, treasure: { activator: 'Tschigarillo', ends: t + 6079e3 } }; }
+  else { const r = await db.rpc('get_blessings'); if (r.error) return; BL = Object.fromEntries(r.data.map(x => [x.key, { activator: x.activator, ends: Date.parse(x.ends_at) }])); }
+  renderSegen();
+}
+function renderSegen() {
+  const now = Date.now();
+  $('segenRows').innerHTML = BLESS.map(([k, n]) => {
+    const b = BL[k], on = b && b.ends > now;
+    return `<tr><td><img src="${ICONS[k]}" alt="" width="32" height="32" style="image-rendering:pixelated"></td><td>${esc(n)}${BONUS[k] ? `<br><span class="hint">${esc(BONUS[k])}</span>` : ''}</td><td>${on ? esc(b.activator) : '✕'}</td><td class="n cd" data-k="${k}">${on ? hms(b.ends - now) : '✕'}</td></tr>`;
+  }).join('');
+}
+setInterval(() => document.querySelectorAll('.cd').forEach(td => {
+  const b = BL[td.dataset.k];
+  if (b && b.ends > Date.now()) td.textContent = hms(b.ends - Date.now()); else if (td.textContent !== '✕') renderSegen();
+}), 1000);
+setInterval(() => { if (!DEMO) loadSegen(); }, 60000);
+function placeSegen() {   // window sits under the balance for visitors, inside the Segen tab for logged-in roles
+  const logged = !!(S && ROLE), inTab = logged && tab === 'segen';
+  (inTab ? $('segenSlot') : $('pubSlot')).appendChild($('segenWin')); $('segenWin').hidden = logged && !inTab;
+}
+function renderSegenForm() {
+  $('fSegen').hidden = !(ROLE === 'admin' || ROLE === 'treasurer');
+  setOpts($('sgKey'), BLESS.map(([k, n]) => `<option value="${k}">${esc(n)}</option>`).join(''));
+  setOpts($('sgWho'), S.members.filter(m => m.active).map(m => `<option>${esc(m.name)}</option>`).join(''));
+  $('sgH').textContent = sgHours + ' h'; $('sgMinus').hidden = sgHours <= 3;
+  $('sgLog').innerHTML = S.bLog.map(l => `<li>${new Date(l.at).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })} – ${esc(l.activator)}: ${esc(itemName(l.blessing_key))} +${l.hours} h${l.from_bank ? ' (Bank)' : ''}</li>`).join('');
+}
+$('sgPlus').onclick = () => { sgHours += 3; renderSegenForm(); };
+$('sgMinus').onclick = () => { sgHours = Math.max(3, sgHours - 3); renderSegenForm(); };
+$('sgWho').onchange = () => { $('sgBank').checked = $('sgWho').value === 'ExordiumBank'; };
+$('fSegen').onsubmit = async e => {
+  e.preventDefault(); const k = $('sgKey').value, who = $('sgWho').value, bank = $('sgBank').checked;
+  if (!confirm(`${itemName(k)} für ${who}: +${sgHours} h${bank ? ` (${sgHours / 3}× aus der Bank)` : ''} eintragen?`)) return;
+  await run(db.rpc('blessing_activate', { p_key: k, p_activator: who, p_hours: sgHours, p_from_bank: bank }), 'Segen eingetragen'); sgHours = 3;
+};
+
 function demoRefresh() {
   const names = ['Tschigarillo','Eska','Wambo','Salvation','XinZhao','Verhanft','Asmodeus','Siriez','Xutu','Malsomalso','Pomm','MonkyDAce','Muze','ExordiumBank'];
   const paid = { 1: 3, 2: 6, 3: 3, 4: 3, 7: 6, 8: 3, 10: 6 };   // member id -> KKK
@@ -230,19 +285,20 @@ function demoRefresh() {
     names: [{ id: 1, email: 'schatzmeister@demo', display_name: 'Schatzmeister' }],
     items: ITEMS.map(([key, name], i) => ({ key, name, sort: i + 1 })),
     inv: [['xp', 8], ['treasure', 11], ['luck', 9], null, null, ['foundation', 841], ['log', 200], ['plywood', 31]].map((x, s) => x && { page: 1, slot: s, item_key: x[0], qty: x[1] }).filter(Boolean),
-    invLog: [], invCheck: { checked_at: null }
+    invLog: [], invCheck: { checked_at: null },
+    bLog: [{ at: new Date().toISOString(), blessing_key: 'xp', activator: 'Tschigarillo', hours: 3, from_bank: false }]
   };
-  ROLE = 'admin'; ME = 'admin@demo';
+  ROLE = 'admin'; ME = 'admin@demo'; loadSegen();
   $('bal').textContent = fmt(S.settings.opening_balance + S.donations.reduce((a, d) => a + d.amount, 0) - S.expenses.reduce((a, e) => a + e.amount, 0));
   $('app').hidden = false; $('noRole').hidden = true; $('login').hidden = true; $('logout').hidden = true; $('demoBanner').hidden = false;
   render();
 }
 async function refresh() {
   if (DEMO) return demoRefresh();
-  await loadBalance();
+  await loadBalance(); loadSegen();
   const { data: { session } } = await db.auth.getSession();
   $('login').hidden = !!session; $('logout').hidden = !session;
-  if (!session) { S = null; $('app').hidden = true; $('noRole').hidden = true; return; }
+  if (!session) { S = null; $('app').hidden = true; $('noRole').hidden = true; placeSegen(); return; }
   try {
     ME = (session.user.email || '').toLowerCase();
     const me = await fetchAll('staff');   // admin gets all rows, everyone else only their own
@@ -258,6 +314,7 @@ async function refresh() {
     S.inv = await q('inventory');
     S.invLog = await db.from('inventory_log').select().order('id', { ascending: false }).limit(12).then(r => r.data || []);
     S.invCheck = (await q('inventory_check'))[0];
+    S.bLog = await db.from('blessing_log').select().order('id', { ascending: false }).limit(15).then(r => r.data || []);
   } catch (e) { toast('Laden fehlgeschlagen: ' + e.message); return; }
   render();
 }
@@ -283,11 +340,11 @@ function statusCell(s) {
 function render() {
   const isAdmin = ROLE === 'admin', canBook = isAdmin || ROLE === 'treasurer';
   $('fMember').hidden = !canBook;
-  const nav = [['members','Mitglieder'],['inv','Inventar'],['in','Einnahme'],['out','Ausgabe'],['log','Verlauf'],['set','Einstellungen']].filter(([k]) => k === 'set' ? isAdmin : (k === 'in' || k === 'out') ? canBook : true);
+  const nav = [['members','Mitglieder'],['inv','Inventar'],['segen','Segen'],['in','Einnahme'],['out','Ausgabe'],['log','Verlauf'],['set','Einstellungen']].filter(([k]) => k === 'set' ? isAdmin : (k === 'in' || k === 'out') ? canBook : true);
   if (!nav.some(([k]) => k === tab)) tab = 'members';
   $('nav').innerHTML = nav.map(([k, t]) => `<button class="alt ${k === tab ? 'on' : ''}" data-t="${k}">${t}</button>`).join('');
-  ['members','inv','in','out','log','set'].forEach(k => $('t-' + k).hidden = k !== tab);
-  renderInv();
+  ['members','inv','segen','in','out','log','set'].forEach(k => $('t-' + k).hidden = k !== tab);
+  renderInv(); renderSegenForm(); placeSegen();
 
   const list = S.members.filter(m => m.active || $('showInactive').checked).map(m => ({ m, s: stats(m) }))
     .sort((x, y) => (x.m.active ? 0 : 2) + (x.m.no_goal ? 1 : 0) - (y.m.active ? 0 : 2) - (y.m.no_goal ? 1 : 0));
@@ -312,7 +369,7 @@ function render() {
   const done = new Set([...S.donations.filter(d => d.storno_of).map(d => 'in' + d.storno_of), ...S.expenses.filter(x => x.storno_of).map(x => 'out' + x.storno_of)]);   // keys carry the table, ids repeat across tables
   const rows = [
     ...S.donations.map(d => ({ t: 'in', r: d, det: names[d.member_id] + (d.note ? ' – ' + d.note : '') })),
-    ...S.expenses.map(e => ({ t: 'out', r: e, det: e.purpose + (e.item_key ? ` (${e.item_qty}× ${itemName(e.item_key)})` : '') }))
+    ...S.expenses.map(e => ({ t: 'out', r: e, det: e.item_key ? (e.purpose === itemName(e.item_key) ? '' : e.purpose + ' – ') + `${e.item_qty}× ${itemName(e.item_key)}` : e.purpose }))
   ].sort((a, b) => b.r.created_at.localeCompare(a.r.created_at)).slice(0, 60);
   $('log').innerHTML = rows.map(({ t, r, det }) => {
     const can = canBook && r.amount > 0 && !r.storno_of && !done.has(t + r.id);
@@ -349,9 +406,9 @@ $('fIn').onsubmit = async e => { e.preventDefault();
   $('inAmt').value = ''; $('inNote').value = ''; };
 $('fOut').onsubmit = async e => { e.preventDefault();
   const amt = parseAmt($('outAmt').value); if (!amt) return toast('Betrag nicht lesbar, z. B. 2kkk');
-  const why = $('outPurpose').value.trim();
+  const item = $('outItem').value, qty = parseInt($('outQty').value), why = $('outPurpose').value.trim() || (item ? itemName(item) : '');
+  if (!why) return toast('Bitte ein Item wählen oder einen Zweck eintragen');
   if (!confirm(`Ausgabe ${fmt(amt)} für "${why}" buchen?`)) return;
-  const item = $('outItem').value, qty = parseInt($('outQty').value);
   if (item && !(qty >= 1)) return toast('Menge fehlt');
   await run(item ? db.rpc('book_expense', { p_amount: amt, p_date: $('outDate').value, p_purpose: why, p_item: item, p_qty: qty })
                  : db.from('expenses').insert({ amount: amt, booked_on: $('outDate').value, purpose: why }), 'Ausgabe gebucht');
@@ -386,7 +443,12 @@ $('fLogin').onsubmit = async () => {
   $('lPass').value = ''; if (r.error) toast('Login fehlgeschlagen'); };
 $('logout').onclick = () => db.auth.signOut();
 // Never await Supabase calls inside this callback (auth lock deadlock), so defer the refresh.
-db.auth.onAuthStateChange(() => { setTimeout(refresh, 0); });
+let lastUid = null;
+db.auth.onAuthStateChange((ev, session) => {
+  const uid = session ? session.user.id : null;
+  if (ev === 'TOKEN_REFRESHED' || (ev === 'SIGNED_IN' && uid === lastUid)) return;   // window refocus fires SIGNED_IN again
+  lastUid = uid; setTimeout(refresh, 0);
+});
 refresh();
 </script><!-- ASSETS: logo and font embedded as text, no need to touch -->
 <style>
