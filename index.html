@@ -72,6 +72,7 @@ button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid 
  <label style="flex-direction:row;align-items:center"><input type="checkbox" id="showInactive"> Inaktive zeigen</label></form>
  <div class="wrap"><table><thead><tr><th>Mitglied</th><th>Gesamt</th><th>Spenden</th><th>Letzte Spende</th><th>Diese Woche</th><th>Wochenziel</th><th>Rang</th><th></th></tr></thead><tbody id="rows"></tbody></table></div>
  <p class="hint">Klick auf einen Namen zeigt alle Spenden. Zählung ab der Startwoche, Rückstände bleiben bestehen.</p>
+ <div id="linkBox" hidden><h3>Discord-Verknüpfungen</h3><div id="linkRows"></div></div>
 </section>
 <section id="t-inv" hidden><div class="invwrap">
  <div class="win"><h2>Inventar</h2><div class="bal" style="padding:10px"><b id="invYang" style="font-size:34px"></b></div>
@@ -289,6 +290,26 @@ $('sgLog').onclick = e => {
   if (confirm('Diesen Eintrag rückgängig machen?' + (l.from_bank ? ' Die Segen kommen ins Bank-Inventar zurück.' : ''))) run(db.rpc('blessing_undo', { p_id: id }), 'Rückgängig gemacht');
 };
 
+// ---- Discord links (approve requests that members made through the bot) ----
+function renderLinks() {
+  const mayBook = ROLE === 'admin' || ROLE === 'treasurer';
+  $('linkBox').hidden = !mayBook || !S.links.length;
+  const opts = S.members.filter(m => m.active).map(m => `<option value="${m.id}">${esc(m.name)}</option>`).join('');
+  const memberName = id => (S.members.find(m => m.id === id) || {}).name || '?';
+  $('linkRows').innerHTML = S.links.map(l => l.status === 'pending'
+    ? `<div class="row" style="align-items:center"><span><b>${esc(l.discord_name)}</b> will „${esc(l.requested_name)}“ sein</span><select data-for="${esc(l.discord_id)}">${l.member_id ? opts.replace(`value="${l.member_id}"`, `value="${l.member_id}" selected`) : '<option value="">– Mitglied wählen –</option>' + opts}</select><button class="sm" data-ok="${esc(l.discord_id)}">Bestätigen</button><button class="alt sm" data-no="${esc(l.discord_id)}">Ablehnen</button></div>`
+    : `<div class="row" style="align-items:center"><span><b>${esc(l.discord_name)}</b> = ${esc(memberName(l.member_id))}</span><button class="alt sm" data-no="${esc(l.discord_id)}">Entfernen</button></div>`).join('');
+}
+$('linkRows').onclick = e => {
+  const ok = e.target.dataset.ok, no = e.target.dataset.no;
+  if (ok) {
+    const sel = document.querySelector(`#linkRows select[data-for="${CSS.escape(ok)}"]`);
+    if (!sel.value) return toast('Bitte erst ein Mitglied wählen');
+    run(db.from('discord_links').update({ status: 'approved', member_id: Number(sel.value) }).eq('discord_id', ok), 'Verknüpft');
+  }
+  if (no && confirm('Wirklich entfernen oder ablehnen?')) run(db.from('discord_links').delete().eq('discord_id', no), 'Entfernt');
+};
+
 function demoRefresh() {
   const names = ['Tschigarillo','Eska','Wambo','Salvation','XinZhao','Verhanft','Asmodeus','Siriez','Xutu','Malsomalso','Pomm','MonkyDAce','Muze','ExordiumBank'];
   const paid = { 1: 3, 2: 6, 3: 3, 4: 3, 7: 6, 8: 3, 10: 6 };   // member id -> KKK
@@ -302,6 +323,7 @@ function demoRefresh() {
     items: ITEMS.map(([key, name], i) => ({ key, name, sort: i + 1 })),
     inv: [['xp', 8], ['treasure', 11], ['luck', 9], null, null, ['foundation', 841], ['log', 200], ['plywood', 31]].map((x, s) => x && { page: 1, slot: s, item_key: x[0], qty: x[1] }).filter(Boolean),
     invLog: [], invCheck: { checked_at: null },
+    links: [{ discord_id: '1', discord_name: 'eska_dc', requested_name: 'Eska', member_id: 2, status: 'pending' }, { discord_id: '2', discord_name: 'wambo_dc', requested_name: 'Wambo', member_id: 3, status: 'approved' }],
     bLog: [{ id: 1, reverted: false, at: new Date().toISOString(), blessing_key: 'xp', activator: 'Tschigarillo', hours: 3, from_bank: false }]
   };
   ROLE = 'admin'; ME = 'admin@demo'; loadSegen();
@@ -330,6 +352,7 @@ async function refresh() {
     S.inv = await q('inventory');
     S.invLog = await db.from('inventory_log').select().order('id', { ascending: false }).limit(12).then(r => r.data || []);
     S.invCheck = (await q('inventory_check'))[0];
+    S.links = await q('discord_links');
     S.bLog = await db.from('blessing_log').select().order('id', { ascending: false }).limit(15).then(r => r.data || []);
   } catch (e) { toast('Laden fehlgeschlagen: ' + e.message); return; }
   render();
@@ -360,7 +383,7 @@ function render() {
   if (!nav.some(([k]) => k === tab)) tab = 'members';
   $('nav').innerHTML = nav.map(([k, t]) => `<button class="alt ${k === tab ? 'on' : ''}" data-t="${k}">${t}</button>`).join('');
   ['members','inv','segen','in','out','log','set'].forEach(k => $('t-' + k).hidden = k !== tab);
-  renderInv(); renderSegenForm(); placeSegen();
+  renderInv(); renderSegenForm(); renderLinks(); placeSegen();
 
   const list = S.members.filter(m => m.active || $('showInactive').checked).map(m => ({ m, s: stats(m) }))
     .sort((x, y) => (x.m.active ? 0 : 2) + (x.m.no_goal ? 1 : 0) - (y.m.active ? 0 : 2) - (y.m.no_goal ? 1 : 0));
